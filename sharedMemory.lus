@@ -27,8 +27,8 @@ tel
 node MEM(have_req : bool; req : bool^3) returns(ret: bool^3);
 	var memory : bool^2;
 	let
-		memory[0] = if have_req and req[0] = 0 and req[2] = 1 then req[1] else pre memory[0];
-		memory[1] = if have_req and req[0] = 1 and req[2] = 1 then req[1] else pre memory[1];
+		memory[0] = if have_req and req[0] = 0 and req[2] = 1 then req[1] else 0->pre memory[0];
+		memory[1] = if have_req and req[0] = 1 and req[2] = 1 then req[1] else 0->pre memory[1];
 		
 		ret[0]=req[0];
 		ret[1]=if req[0] = 0 then memory[0] else memory[1];
@@ -93,11 +93,11 @@ else if pre last_cache[0] = 0 and pre last_cache[1] = 1 and pre last_cache2[0] =
 else (if L1_1 then [0,0] else if L1_2 then [0,1] else [1,0]);(*12*)
 
 (*last_cache2 avant dernier cache elu, si aucun cache ou seulement 1 a été élu vaut [1,1]*)
-last_cache2 = if L1_1 or L1_2 or L1_3 then [1,1]->pre last_cache else [1,1]->pre last_cache2;
+last_cache2 = if (L1_1 or L1_2 or L1_3) and not b_in_mem then [1,1]->pre last_cache else [1,1]->pre last_cache2;
 (*last_cache1 dernier cache elu, si aucun cache n'a été élu vaut [1,1]*)
-last_cache = if L1_1 or L1_2 or L1_3 then arb_gnt else [1,1]->pre last_cache;
+last_cache = if (L1_1 or L1_2 or L1_3) and not b_in_mem then arb_gnt else [1,1]->pre last_cache;
 
-(*note: ne pas confondre la valeur [1,1] des derniers caches qui correspond à aucun cache, et la valeur [1,1] de arb_gnt
+(* note: ne pas confondre la valeur [1,1] des derniers caches qui correspond à aucun cache, et la valeur [1,1] de arb_gnt
 qui corresponds a l'election de la memoire les trois autres possibilites du couple de booleens designe dans les deux cas
 les 3 caches *)
 
@@ -111,48 +111,67 @@ node CACHE_L1(new_req, ad, val, sens, cache_maj, ad_maj, val_maj: bool) returns(
 var cache_ad, cache_val : bool;
 let
 
-	cache_ad = if sens = 1 and new_req then ad else if cache_maj then ad_maj else pre cache_ad;
-	cache_val = if sens = 1 and new_req then val else if cache_maj then val_maj else pre cache_val;
+	cache_ad = if sens = 1 and new_req then ad else if cache_maj then ad_maj else 0->pre cache_ad;
+	cache_val = if sens = 1 and new_req then val else if cache_maj then val_maj else 0->pre cache_val;
 
 	ret = if new_req and sens = 0 and ad = cache_ad then [ad,cache_val,sens,1] 
 		else if  new_req then [ad,val,sens,0]
-		else [0,0,0,0];
+		else [0->pre ad, 0->pre val,0->pre sens, 0];
 tel
 
 
 (* ********** VI. SYSTEM ********** *)
 
 node SYSTEM(proc1, proc2, proc3: bool^4;)
-	returns(b1, b2, b3 : bool);
-var L1_1, L1_2, L1_3,new_req1 : bool^4; mem , b_out,read1: bool^3; elected1, elected2,elected3, have_requestmem,have_request1,bus_req1,arbitrage : bool; arb_gnt : bool^2;
+	returns(b1, b2, b3 : bool;
+	L1_1, L1_2, L1_3,new_req1, new_req2,new_req3 : bool^4; mem , b_out,read1,read2,read3: bool^3; elected1, elected2,elected3, have_requestmem,have_request1,have_request2,have_request3,bus_req1,bus_req2,bus_req3,arbitrage : bool; arb_gnt : bool^2;);
 let
-	have_requestmem = if 0->pre elected1 then 1 else 0;
-	have_request1 = if proc1[0] or (0->pre have_request1 and not pre elected1) then 1 else 0;
 
-	new_req1 = if have_request1 and not 0->pre have_request1 then [1,proc1[1], proc1[2], proc1[3]] else [0,0,0,0];
+	(* have_request: vrai si le cache ou la memoire a une requete non satisfaite*)
+	have_requestmem = if (0->pre elected1) or (0->pre elected2) or (0->pre elected3) then 1 else 0;
+	have_request1 = if proc1[0] or (0->pre have_request1 and not (0->pre elected1)) then 1 else 0;
+	have_request2 = if proc2[0] or (0->pre have_request2 and not (0->pre elected2)) then 1 else 0;
+	have_request3 = if proc3[0] or (0->pre have_request3 and not (0->pre elected3)) then 1 else 0;
 
+	(*new req: vrai si le system a pris en compte une nouvelle requete*)
+	new_req1 = if have_request1 and not (0->pre have_request1) or proc1[0] and have_requestmem then [1,proc1[1], proc1[2], proc1[3]] else [0,0,0,0];
+	new_req2 = if have_request2 and not (0->pre have_request2) or proc2[0] and have_requestmem then [1,proc2[1], proc2[2], proc2[3]] else [0,0,0,0];
+	new_req3 = if have_request3 and not (0->pre have_request3) or proc3[0] and have_requestmem then [1,proc3[1], proc3[2], proc3[3]] else [0,0,0,0];
+
+	(*L1_1: [adresse, valeur, sens, flag à vrai si valeur en cache] retour du cache renvoyé sur le bus*)
     L1_1 = CACHE_L1(new_req1[0],new_req1[1],new_req1[2],new_req1[3], 0->pre read1[0], 0->pre read1[1], 0->pre read1[2]);
-    L1_2 = [0,0,0,0];
-    L1_3 = [0,0,0,0];
+    L1_2 = CACHE_L1(new_req2[0],new_req2[1],new_req2[2],new_req2[3], 0->pre read2[0], 0->pre read2[1], 0->pre read2[2]);
+    L1_3 = CACHE_L1(new_req3[0],new_req3[1],new_req3[2],new_req3[3], 0->pre read3[0], 0->pre read3[1], 0->pre read3[2]);
     
+    (*bus_req: vaut vrai si le cache a besoin du bus (valeur non trouvée en cache)*)
 	bus_req1 = if have_request1 and L1_1[3] = 0 then 1 else 0;
-	arb_gnt = REFEREE(bus_req1,0,0,have_requestmem);
+	bus_req2 = if have_request2 and L1_2[3] = 0 then 1 else 0;
+	bus_req3 = if have_request3 and L1_3[3] = 0 then 1 else 0;
 
-	arbitrage = if bus_req1 or have_requestmem then 1 else 0;
+	(*arb_gnt: resultat de l'arbitrage*)
+	arb_gnt = REFEREE(bus_req1,bus_req2,bus_req3,have_requestmem);
+
+	(* arbitrage: vrai si l'arbitre a au moins une entrée vraie (quelqu'un doit etre elu)*)
+	arbitrage = if bus_req1 or bus_req2 or bus_req3 or have_requestmem then 1 else 0;
 	
+	(*elected: vrai si le cache est élu*)
 	elected1 = if arbitrage and arb_gnt[0] = 0 and arb_gnt[1] = 0 then 1 else 0;
-	elected2 = 0;
-	elected3 = 0;
+	elected2 = if arbitrage and arb_gnt[0] = 0 and arb_gnt[1] = 1 then 1 else 0;
+	elected3 = if arbitrage and arb_gnt[0] = 1 and arb_gnt[1] = 0 then 1 else 0;
 	
+	(*mem: retour de la memoire*)
 	mem = MEM(if arb_gnt[0] = 1 and arb_gnt[1] = 1 then 1 else 0,[0,0,0]->pre b_out);
-	b_out = BUS(L1_1[0..2],[0,0,0],[0,0,0],mem, arb_gnt);
+	b_out = BUS(L1_1[0..2],L1_2[0..2],L1_3[0..2],mem, arb_gnt);
 	
-	b1 = if L1_1[3] = 1 then L1_1[1] else if arb_gnt[0] = 1 and arb_gnt[1] = 1 then b_out[1] else 0;
-	b2 = 0;
-	b3 = 0;
+	(*b: retour du système, valeur souhaitée pour la lecture ou valeur ecrite pour l'écriture*)
+	b1 = if L1_1[3] = 1 then L1_1[1] else if arb_gnt[0] = 1 and arb_gnt[1] = 1 and 0->pre elected1 then b_out[1] else 0;
+	b2 = if L1_2[3] = 1 then L1_2[1] else if arb_gnt[0] = 1 and arb_gnt[1] = 1 and 0->pre elected2 then b_out[1] else 0;
+	b3 = if L1_3[3] = 1 then L1_3[1] else if arb_gnt[0] = 1 and arb_gnt[1] = 1 and 0->pre elected3 then b_out[1] else 0;
 
-    read1 = [0,0,0]->if arb_gnt[0] = 1 and arb_gnt[1] = 1 and b_out[2] = 0 then [1,b_out[0],b_out[1]] else [0,0,0];
-
+	(*read: [si une valeur est lue, adresse de la valeur lue, valeur lue] sert pour la mise à jour du cache*)
+    read1 = [0,0,0]->if arb_gnt[0] = 1 and arb_gnt[1] = 1 and 0->pre elected1 and b_out[2] = 0 then [1,b_out[0],b_out[1]] else [0,0,0];
+    read2 = [0,0,0]->if arb_gnt[0] = 1 and arb_gnt[1] = 1 and 0->pre elected2 and b_out[2] = 0 then [1,b_out[0],b_out[1]] else [0,0,0];
+    read3 = [0,0,0]->if arb_gnt[0] = 1 and arb_gnt[1] = 1 and 0->pre elected3 and b_out[2] = 0 then [1,b_out[0],b_out[1]] else [0,0,0];
 tel
 
 
